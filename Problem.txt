@@ -1,0 +1,179 @@
+Java program to be created:
+Code using packages:
+Two friends A and B are conversing on the phone. Although it looks like a normal conversation, they are secretly sharing a password. There are some numbers mentioned in the conversation in digit form. You have to get all the numbers from the conversation in digit form. You have get all numbers from the conversation, check if the number is Keith composite or not, and then concatenate those numbers. Additionally, the numbers 1 to 9 present in text form(one, two, three etc) must be transformed into numeric form(1,2,3 etc). Add all those numbers and concatenate the sum finally to the previously extracted Keith composite number. Find the secret code and return it in string format by using Packages. 
+Perform the operations in two forms numeric and string in two different packages.
+
+Create folder code in the java folder(/projects/challenge/FindSecretCode/src/main/java/). In the code folder, create two folders numbers and string. The code/numbers refers to code.numbers package. and the code/string refers to code.string package.
+String operations - Add digits that are in text form(e.g. three), and extact digits that in numeric form(e.g. 56). This logic should be written in the ExtractString.java file inside code.string package. 
+Numeric operations - check if the extracted numbers are Keith Composite or not. This logic should be written in NumberFinder.java file inside the code.numbers package. Call the function containing the numeric and string operations in the getInput(String conversation) function, present the KeithClass.java file by importing those packages, and return the resultant secret code in string format.
+The variable conversation contains the input(conversation between A and B) in string format. 
+Sample INput:
+A: Hello, Priya 3 spearking. Is this Aditi?
+B: Yea Priya! I am there 28. 
+A: How are you dear?
+B: I am fine 19. What about you Priya 75?
+A: Glad to hear that! Me too fine ! seven. Aditi how are your five holidays going?
+B: Great Priya! I am enjoying well!
+
+Sample output:
+287512
+
+Explanation:
+From the input data, the digits deciphered are 3, 28, 19, 75. Out of these, 28 and 75 are Keith composite numbers. The numbers in text form are seven and five, and the sum of these numbers is 12. The concatenation of these numbers is 287512, which is secret code.
+
+
+*Java Program:*
+package com.fresco;
+
+import code.numbers.NumberFinder;
+import code.string.ExtractString;
+import java.util.*;
+
+public class KeithClass {
+    public String getInput(String conversation) {
+		//Write your code
+        System.out.println("conversation"+conversation);
+         // Extract numbers from the conversation (both numeric and text form)
+        List<Integer> numbers = ExtractString.extractNumbers(conversation);
+        System.out.println("numbers"+numbers);
+        // Find Keith composite numbers
+        List<Integer> keithComposites = NumberFinder.getKeithCompositeNumbers(numbers);
+        System.out.println("keithComposites"+keithComposites);
+        // Concatenate Keith composite numbers to form the base part of the secret code
+        StringBuilder code = new StringBuilder();
+        for (int num : keithComposites) {
+            code.append(num);
+        }
+           
+        // Sum of all the extracted numbers (text and numeric form)
+        int sum = ExtractString.extractNumberSum(conversation);
+        
+        // Append the sum of numbers to the code
+        code.append(sum);
+
+        // Return the final secret code as a string
+        System.out.println("code"+code.toString());
+        return code.toString();
+    }
+	
+}
+
+
+package code.numbers;
+
+import java.util.*;
+
+public class NumberFinder {
+    // Function to check if a number is a Keith number
+    public static boolean isKeithComposite(int num) {
+        if (num < 10) return false; // Keith numbers are greater than single digit numbers
+
+        // Create the digit list for the number
+        List<Integer> digits = new ArrayList<>();
+        int temp = num;
+        while (temp > 0) {
+            digits.add(0, temp % 10);  // Add digits in reverse order
+            temp /= 10;
+        }
+
+        // Generate the Keith sequence
+        List<Integer> sequence = new ArrayList<>(digits);
+        while (true) {
+            int sum = 0;
+            for (int i = 0; i < digits.size(); i++) {
+                sum += sequence.get(i);
+            }
+            if (sum == num) {
+                return true;  // Keith number
+            }
+            if (sum > num) {
+                return false;  // Not a Keith number
+            }
+            sequence.add(sum); // Add sum to the sequence
+            sequence.remove(0); // Remove the first element to maintain the size of the sequence
+        }
+    }
+
+    // Function to filter out Keith composite numbers from a list
+    public static List<Integer> getKeithCompositeNumbers(List<Integer> numbers) {
+        List<Integer> keithComposites = new ArrayList<>();
+        for (int number : numbers) {
+            if (isKeithComposite(number)) {
+                keithComposites.add(number);
+            }
+        }
+        return keithComposites;
+    }
+}
+
+package code.string;
+
+import java.util.*;
+import java.util.regex.*;
+
+public class ExtractString {
+    // Function to extract numeric values from a string (both text and digits)
+    public static Integer extractNumberSum(String conversation) {
+        int i=0;
+        
+        // Regular expression for finding words representing numbers (1 to 9)
+        Map<String, Integer> numberWords = new HashMap<>();
+        numberWords.put("one", 1);
+        numberWords.put("two", 2);
+        numberWords.put("three", 3);
+        numberWords.put("four", 4);
+        numberWords.put("five", 5);
+        numberWords.put("six", 6);
+        numberWords.put("seven", 7);
+        numberWords.put("eight", 8);
+        numberWords.put("nine", 9);
+      
+        // Extract text numbers (1-9)
+        String[] words = conversation.split("\\s+");
+        for (String word : words) {
+            word = word.toLowerCase();
+            if (numberWords.containsKey(word)) {
+                i +=(numberWords.get(word)).intValue(); // Adding the corresponding number
+            }
+        }
+        return Integer.valueOf(i);
+   }
+     public static List<Integer> extractNumbers(String conversation) {
+ List<Integer> result = new ArrayList<>();
+        // Extract numeric digits
+        Pattern pattern = Pattern.compile("\\d+");
+        Matcher matcher = pattern.matcher(conversation);
+        while (matcher.find()) {
+            result.add(Integer.parseInt(matcher.group())); // Adding found numbers
+        }
+        
+        return result;
+    }
+
+    // Function to calculate the sum of extracted numbers from text (1-9) and numeric form
+    public static int sumExtractedNumbers(String conversation) {
+        int sum = 0;
+        List<Integer> numbers = extractNumbers(conversation);
+        for (int num : numbers) {
+            sum += num;
+        }
+        return sum;
+    }
+}
+
+*Test case failing:*
+conversation input - A: Hello, may I speak to Alice 14 please?  four B: This is she. How's it 19 going? A: I've been trying to call you 28 times all day B: Sorry about that. I was cleaning up 47. A: It's okay 61. B: So what were you calling 75 me about? A: Oh, I just wanted to see if you wanted to hang out 197 tomorrow. B: Sure, what did you want to do? A: Maybe we can go see a movie or something. B: That sounds like fun. Let's do it. A: I'll see you 7ytr4fhh6 tomorrow then. five B: See you then. Goodbye.
+
+numbers[14, 19, 28, 47, 61, 75, 197, 7, 4, 6]
+
+keithComposites[14, 19, 28, 47, 61, 75, 197]
+
+(numberWords.get(word)).intValue()4
+
+(numberWords.get(word)).intValue()5
+
+i9
+secret code - 1419284761751979
+hashcode of secret code -1159550281
+
+expected result hash code 2074622162
