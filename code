@@ -1,0 +1,909 @@
+package com.cnasurety.surbpi.financialfeed.listener.integration.transformer;
+
+import com.cnasurety.bpets.model.Location;
+import com.cnasurety.bpets.model.Obligee;
+import com.cnasurety.bpets.model.WritingCompany;
+import com.cnasurety.bpets.model.*;
+
+import com.cnasurety.surbpi.financialfeed.feed.AskedQuestion;
+import com.cnasurety.surbpi.financialfeed.feed.Bond;
+import com.cnasurety.surbpi.financialfeed.feed.SuretyCommissionTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.BondFeeTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.BondDistributor;
+import com.cnasurety.surbpi.financialfeed.feed.BondDistributorRoleTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.BondFee;
+import com.cnasurety.surbpi.financialfeed.feed.BondInternalOffice;
+import com.cnasurety.surbpi.financialfeed.feed.BondInternalOfficeRoleTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.BondLocation;
+import com.cnasurety.surbpi.financialfeed.feed.BondNumber;
+import com.cnasurety.surbpi.financialfeed.feed.BondObligee;
+import com.cnasurety.surbpi.financialfeed.feed.BondProducer;
+import com.cnasurety.surbpi.financialfeed.feed.BondProducerRoleTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.BondProperty;
+import com.cnasurety.surbpi.financialfeed.feed.BondStatusTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.BondTerm;
+import com.cnasurety.surbpi.financialfeed.feed.Common;
+import com.cnasurety.surbpi.financialfeed.feed.Financials;
+import com.cnasurety.surbpi.financialfeed.feed.InvolvedParty;
+import com.cnasurety.surbpi.financialfeed.feed.ObligeeTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.OwnershipTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.PartyAttributes;
+import com.cnasurety.surbpi.financialfeed.feed.PartyConstructs;
+import com.cnasurety.surbpi.financialfeed.feed.PartyIdentifier;
+import com.cnasurety.surbpi.financialfeed.feed.PartyIdentifierAttributes;
+import com.cnasurety.surbpi.financialfeed.feed.PartyLocation;
+import com.cnasurety.surbpi.financialfeed.feed.PartyName;
+import com.cnasurety.surbpi.financialfeed.feed.PartyNameAttributes;
+import com.cnasurety.surbpi.financialfeed.feed.PartyQuestion;
+import com.cnasurety.surbpi.financialfeed.feed.PostalAddress;
+import com.cnasurety.surbpi.financialfeed.feed.PostalAddressTypeCodeValue;
+import com.cnasurety.surbpi.financialfeed.feed.Producer;
+import com.cnasurety.surbpi.financialfeed.feed.RenewableTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.SubmissionNumber;
+import com.cnasurety.surbpi.financialfeed.feed.SuretyAccount;
+import com.cnasurety.surbpi.financialfeed.feed.SuretyDistributor;
+import com.cnasurety.surbpi.financialfeed.feed.SuretyDistributorIdentifier;
+import com.cnasurety.surbpi.financialfeed.feed.SuretyInternalOffice;
+import com.cnasurety.surbpi.financialfeed.feed.SuretyInternalOfficeTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.SuretyMarketableProduct;
+import com.cnasurety.surbpi.financialfeed.listener.domain.pojo.MessageWrapper;
+import com.cnasurety.surbpi.financialfeed.listener.integration.router.BondFeeTypes;
+import com.cnasurety.surbpi.financialfeed.listener.integration.transformer.mpt.MptDataTransformer;
+import com.cnasurety.surbpi.financialfeed.listener.mapper.FinancialServiceMapper;
+import com.cnasurety.surbpi.financialfeed.listener.util.FinancialUtil;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import jakarta.validation.Valid;
+import lombok.NoArgsConstructor;
+import lombok.SneakyThrows;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+
+import javax.xml.datatype.DatatypeConfigurationException;
+import javax.xml.datatype.DatatypeFactory;
+
+import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.List;
+import java.util.stream.Collectors;
+
+import static java.time.temporal.ChronoUnit.YEARS;
+
+
+@Slf4j
+@NoArgsConstructor
+public class BondDataTransformer {
+    @Autowired
+    FinancialServiceMapper mapper;
+    @Autowired
+    MptDataTransformer mptDataTransformer;
+
+    @Autowired
+    BondFeeTypes bondFeeTypes;
+
+    @Value("${app.sfStateCodes}")
+    private List<java.lang.String> sfStateCodeList;
+
+    private static final String CONST_PRINCIPAL = "Principal";
+    private static final String FULL = "Full";
+    private static final String ONE = "1";
+    private static final String ONE_ZERO = "10";
+    private static final String BPNG = "BPNG";
+    private static final java.lang.String BUSINESS = "Business";
+    private static final java.lang.String SF = "SF";
+
+    Bond transformBond(MessageWrapper message) throws JsonProcessingException, DatatypeConfigurationException {
+        Bond bond = new Bond();
+        BondTerm bondTerm = new BondTerm();
+        BondEventBase eventData = message.getBpetsMessage().getEventData();
+        mapSuretyMarketableProduct(bond, eventData);
+        mapBondTermDetails(bond, bondTerm, message);
+        mapBondObligeeDetails(bond, eventData.getObligees());
+        mapSuretyAccountDetails(bond, eventData);
+        mapBondInternalParty(bond, eventData.getUnderwriter());
+        mapPrincipal(bond, getPrimaryPrincipal(eventData));
+        mapBondDetails(bond, eventData);
+        if (null != eventData.getJob()) {
+            mapJob(bond, eventData.getJob());
+        }
+        mapBondInternalOffice(bond, eventData.getUnderwriter());
+        return bond;
+    }
+
+    private Principal getPrimaryPrincipal(BondEventBase eventData) {
+        List<Principal> filteredPrincipalList = eventData.getPrincipals().stream()
+                .filter(Principal::getIsPrimary).collect(Collectors.toList());
+        if(!filteredPrincipalList.isEmpty()) return filteredPrincipalList.getFirst();
+        else {
+            log.error("Unable to find primary Principal from BPETS");
+            return eventData.getPrincipals().getFirst();
+        }
+    }
+
+    private void mapSuretyAccountDetails(Bond bond, BondEventBase eventData) {
+        SuretyAccount suretyAccount = new SuretyAccount();
+        suretyAccount.setAccountTypeName(null != eventData.getAccount() ? eventData.getAccount().getAccountTypeName() : null);
+        suretyAccount.setAccountNumber(null != eventData.getAccount() ? eventData.getAccount().getEnterpriseId() : null);
+        bond.setSuretyAccount(suretyAccount);
+    }
+
+    private void mapBondDetails(Bond bond, BondEventBase eventData) throws DatatypeConfigurationException {
+        bond.setStatusType(BondStatusTypeEnum.COMPLETED);
+        SubmissionNumber submissionNumber = new SubmissionNumber();
+        submissionNumber.setValue(eventData.getBond().getBondApplicationId().toString());
+        bond.setSubmissionNumber(submissionNumber);
+        BondNumber bondNumber = new BondNumber();
+        bondNumber.setValue(eventData.getBond().getBondNumber());
+        bond.setBondNumber(bondNumber);
+        bond.setEndOfLiabilityDate(eventData.getBond().getExpirationDate() != null ? DatatypeFactory.newInstance().newXMLGregorianCalendar(eventData.getBond().getExpirationDate()) : null);
+        bond.setOriginalEffectiveDate(eventData.getBond().getEffectiveDate() != null ? DatatypeFactory.newInstance().newXMLGregorianCalendar(eventData.getBond().getEffectiveDate()) : null);
+        bond.setRenewableType(getRenewableTypeForBond(eventData.getBondConditions()));
+        bond.setSourceSystemId(BPNG);
+        bond.setBondCoverageDescription(eventData.getProduct().getExternalDescription());
+    }
+
+    private RenewableTypeEnum getRenewableTypeForBond(@Valid BondConditionInfo bondConditions) {
+        if (Boolean.FALSE.equals(bondConditions.getRenewableFlag())) {
+            return RenewableTypeEnum.NOT_RENEWABLE;
+        } else if (Boolean.FALSE.equals(bondConditions.getUwApprovalRequired())) {
+            return RenewableTypeEnum.AUTO;
+        } else {
+            return RenewableTypeEnum.MANUAL;
+        }
+    }
+
+    private void mapSuretyMarketableProduct(Bond bond, BondEventBase eventData) throws JsonProcessingException {
+        SuretyMarketableProduct suretyMarketableProduct = new SuretyMarketableProduct();
+        if(null != eventData.getClassification()) {
+            suretyMarketableProduct.setSuretyProduct(mapper.mapBondSuretyProducts(eventData.getProduct(), eventData.getClassification()));
+            suretyMarketableProduct.getSuretyProduct().setLegacyProductCode(mapper.mapBondSuretyClassifications(eventData.getBond()));
+        }
+
+        suretyMarketableProduct.setJurisdiction(mapper.mapJurisdiction(eventData.getJurisdiction()));
+        suretyMarketableProduct.setWritingCompany(mapWritingCompanyCode(eventData.getWritingCompany()));
+        bond.setSuretyMarketableProduct(suretyMarketableProduct);
+    }
+
+    private void mapBondTermDetails(Bond bond, BondTerm bondTerm, MessageWrapper message) throws DatatypeConfigurationException {
+        BondEventBase eventData = message.getBpetsMessage().getEventData();
+        bondTerm.setContractPaymentAmount(FinancialUtil.mapAmount(eventData.getObligation().getContractAmount()));
+        bondTerm.setContractPriceAmount(FinancialUtil.mapAmount(eventData.getObligation().getContractAmount()));
+        bondTerm.setContractPerformanceAmount(FinancialUtil.mapAmount(eventData.getObligation().getContractAmount()));
+        if (eventData.getJob() != null) {
+            bondTerm.setContractExecutionDate(eventData.getJob().getJobEstimatedStartDate() != null ? DatatypeFactory.newInstance().newXMLGregorianCalendar(eventData.getJob().getJobEstimatedStartDate().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)) : null);
+        }
+        mapBondTermFinancials(bondTerm, eventData);
+        bondTerm.setTermLengthInYears(BigInteger.valueOf(eventData.getObligation().getDurationDays()));
+        bondTerm.setTermBillingType(FinancialUtil.getBondBillingType(eventData.getBillingSettings().getBillToCodeIssuance()));
+        mapRenewalNumber(bondTerm, eventData);
+        bondTerm.setEffectiveDate(eventData.getBond().getEffectiveDate() != null ? DatatypeFactory.newInstance().newXMLGregorianCalendar(eventData.getBond().getEffectiveDate()) : null);
+        bondTerm.setBoundDateTime(FinancialUtil.convertToXMLGregorianCalendar(eventData.getBond().getIssueDate()));
+        bondTerm.setProcessedDateTime(DatatypeFactory.newInstance().newXMLGregorianCalendar(java.lang.String.valueOf(message.getBpetsMessage().getOriginatedTime())));
+        bondTerm.setExpirationDate(eventData.getBond().getExpirationDate() != null ? DatatypeFactory.newInstance().newXMLGregorianCalendar(eventData.getBond().getExpirationDate()) : null);
+        if (Boolean.TRUE.equals(eventData.getBond().getRenewableBond())) {
+            bondTerm.setRenewalDate(eventData.getBond().getRenewalDate() != null ? DatatypeFactory.newInstance().newXMLGregorianCalendar(eventData.getBond().getRenewalDate()) : null);
+        }
+        mapBondDistributorDetails(bondTerm, eventData);
+        mptDataTransformer.mapMPTTaxAndStandardizedAddress(bondTerm, message);
+        bond.getBondTerm().add(bondTerm);
+    }
+
+    private static void mapRenewalNumber(BondTerm bondTerm, BondEventBase eventData) {
+        if(StringUtils.isNotEmpty(eventData.getBond().getRenewalNumber())) {
+            switch (eventData.getBond().getRenewalNumber().length()) {
+                case 1:
+                    bondTerm.setTermNumber(ONE_ZERO.concat(eventData.getBond().getRenewalNumber()));
+                    break;
+                case 2:
+                    bondTerm.setTermNumber(ONE.concat(eventData.getBond().getRenewalNumber()));
+                    break;
+                default:
+                    bondTerm.setTermNumber(eventData.getBond().getRenewalNumber());
+            }
+        }
+    }
+
+    private void mapBondTermFinancials(BondTerm bondTerm, BondEventBase eventData) {
+        if (null != eventData.getBondFinancialView()) {
+            bondTerm.setPremiumAmount(FinancialUtil.mapAmount(eventData.getBondFinancialView().getTotalDiscountedGrossPremium()));
+            bondTerm.setSurtaxAmount(FinancialUtil.mapTaxAmount(eventData.getBondFinancialView().getTotalTaxes()));
+            if(null != eventData.getBondFinancialView().getInvoice()) {
+                bondTerm.setPenaltyAmount(FinancialUtil.mapAmount(eventData.getBondFinancialView().getInvoice().getBondAmount()));
+                if ((eventData.getBondFinancialView().getInvoice().getFees().compareTo(BigDecimal.ZERO) > 0)
+                        && null != eventData.getBondFinancialView().getFees()) {
+                    mapBondFeeDetails(bondTerm, eventData.getBondFinancialView());
+                }
+            }
+        }
+    }
+
+    public void mapBondFeeDetails(BondTerm bondTerm, @Valid BondFinancialsView financialsView) {
+        BondFee filingBondFee = new BondFee();
+        BondFee miscBondFee = new BondFee();
+        financialsView.getFees().forEach(feeItem -> {
+            BondFeeTypeEnum feeDesc = bondFeeTypes.getFeeType(feeItem.getDescription());
+            if (BondFeeTypeEnum.FILING.equals(feeDesc)) {
+                mapBondFees(filingBondFee, feeItem, feeDesc);
+            } else  {
+                mapBondFees(miscBondFee, feeItem, BondFeeTypeEnum.MISCELLANEOUS);
+            }
+        });
+        if(null != filingBondFee.getFeeAmount()) {
+            bondTerm.getBondFee().add(filingBondFee);
+        }
+        if(null != miscBondFee.getFeeAmount()) {
+            bondTerm.getBondFee().add(miscBondFee);
+        }
+    }
+
+    public void mapBondFees(BondFee bondFee, FeeItem feeItem, BondFeeTypeEnum feeDesc) {
+        bondFee.setFeeType(feeDesc);
+        if(null != bondFee.getFeeAmount() && bondFee.getFeeAmount().getTheAmount().compareTo(BigDecimal.ZERO) > 0) {
+            bondFee.setFeeAmount(FinancialUtil.mapAmount(feeItem.getValue().add(bondFee.getFeeAmount().getTheAmount())));
+        } else bondFee.setFeeAmount(FinancialUtil.mapAmount(feeItem.getValue()));
+    }
+
+    void mapBondDistributorDetails(BondTerm bondTerm, BondEventBase eventData) {
+        BondDistributor bondDistributor = new BondDistributor();
+        SuretyDistributor suretyDistributor = new SuretyDistributor();
+        SuretyDistributorIdentifier suretyDistributorIdentifier = new SuretyDistributorIdentifier();
+        bondDistributor.setDistributorRoleType(BondDistributorRoleTypeEnum.OWNING);
+
+        suretyDistributorIdentifier.setSuretyDistributorCode(FinancialUtil.splitString(eventData.getAgency().getEnterpriseId(), "Second"));
+        suretyDistributorIdentifier.setSuretyStateCode(FinancialUtil.splitString(eventData.getAgency().getEnterpriseId(), "First"));
+        suretyDistributor.setSuretyDistributorIdentifier(suretyDistributorIdentifier);
+        bondDistributor.setSuretyDistributor(suretyDistributor);
+        if (null != eventData.getBondFinancialView()) {
+            bondDistributor.setCommissionPercentage(eventData.getBondFinancialView().getInvoice().getCommissionRate().multiply(BigDecimal.valueOf(100)));
+            bondDistributor.setCommissionType(eventData.getBondFinancialView().getCommissions().getOverrideAmount() != null ? SuretyCommissionTypeEnum.BOND : SuretyCommissionTypeEnum.AGENCY);
+        }
+        BondProducer bondProducer = new BondProducer();
+        Producer producer = new Producer();
+        bondProducer.setProducerRoleType(BondProducerRoleTypeEnum.ATTORNEY_IN_FACT);
+        if (Boolean.TRUE.equals(eventData.getAgent().getPowerOfAttorneyFlag())) {
+            producer.setProducerName(mapPartyName(FULL, eventData.getAgent().getFullName()));
+        } else {
+            producer.setProducerName(mapPartyName(FULL, eventData.getAttorneyInFact().getFirstName().concat(" ").concat(eventData.getAttorneyInFact().getLastName())));
+        }
+        bondProducer.setProducer(producer);
+        bondDistributor.getBondProducer().add(bondProducer);
+        bondTerm.getBondDistributor().add(bondDistributor);
+    }
+
+    void mapBondInternalParty(Bond bond, UnderwriterInfo underWriter) throws JsonProcessingException {
+        bond.getBondInternalParty().add(mapper.mapBondInternalPartyUnderWriter(underWriter));
+    }
+
+    void mapBondInternalOffice(Bond bond, UnderwriterInfo underwriterInfo) {
+        SuretyInternalOffice suretyInternalOffice = new SuretyInternalOffice();
+        BondInternalOffice bondInternalOffice = new BondInternalOffice();
+        mapSuretyInternalOffice(suretyInternalOffice, underwriterInfo);
+        bondInternalOffice.setInternalOffice(suretyInternalOffice);
+        bondInternalOffice.setInternalOfficeRoleType(BondInternalOfficeRoleTypeEnum.PROCESSING);
+        bond.getBondInternalOffice().add(bondInternalOffice);
+    }
+
+    private void mapSuretyInternalOffice(SuretyInternalOffice suretyInternalOffice, UnderwriterInfo underwriterInfo) {
+        if (null != underwriterInfo.getEmployeeInfo()) {
+            if (null != underwriterInfo.getEmployeeInfo().getOfficeLocationClientRefId()) {
+                if (sfStateCodeList.contains(underwriterInfo.getEmployeeInfo().getOfficeLocationClientRefId())) {
+                    suretyInternalOffice.setInternalOfficeCode("SF");
+                } else {
+                    suretyInternalOffice.setInternalOfficeCode(underwriterInfo.getEmployeeInfo().getOfficeLocationClientRefId());
+                }
+            }
+            if (null != underwriterInfo.getEmployeeInfo().getOfficeLocationName()) {
+                suretyInternalOffice.setOfficeName(underwriterInfo.getEmployeeInfo().getOfficeLocationName());
+            }
+            if (null != suretyInternalOffice.getInternalOfficeCode()) {
+                if (suretyInternalOffice.getInternalOfficeCode().equalsIgnoreCase(SF)) {
+                    suretyInternalOffice.setOfficeType(SuretyInternalOfficeTypeEnum.SIOUX_FALLS);
+                } else {
+                    suretyInternalOffice.setOfficeType(SuretyInternalOfficeTypeEnum.BRANCH);
+                }
+            }
+        }
+    }
+
+    void mapBondObligeeDetails(Bond bond, List<Obligee> obligeeList) {
+        BondObligee bondObligee = new BondObligee();
+        if(null != obligeeList && !obligeeList.isEmpty()) {
+            Obligee obligee = obligeeList.getFirst();
+            com.cnasurety.surbpi.financialfeed.feed.Obligee oblg = new com.cnasurety.surbpi.financialfeed.feed.Obligee();
+            if (null != obligee.getObligeeName()) {
+                oblg.setName(mapPartyName(FULL, obligee.getObligeeName()));
+            }
+            if (null != obligee.getClientRefId()) {
+                oblg.setObligeeCode(obligee.getClientRefId());
+            }
+            setObligeeType(obligee, oblg);
+            bondObligee.setObligee(oblg);
+            bondObligee.setPrimaryObligeeIndicator(obligee.getIsPrimary());
+            bond.getSuretyMarketableProduct().getBondObligee().add(bondObligee);
+        }
+    }
+
+    private void setObligeeType(Obligee obligee, com.cnasurety.surbpi.financialfeed.feed.Obligee oblg) {
+        if (obligee.getObligeeType().equalsIgnoreCase("SCHOOL_DISTRICT")) {
+            oblg.setObligeeType(ObligeeTypeEnum.SCHOOL);
+        } else if (obligee.getObligeeType().equalsIgnoreCase("FEDERAL_GOVERNMENT")) {
+            oblg.setObligeeType(ObligeeTypeEnum.FEDERAL);
+        } else if (obligee.getObligeeType().equalsIgnoreCase("CITY_COUNTY")) {
+            oblg.setObligeeType(ObligeeTypeEnum.CITY_AND_COUNTY);
+        } else {
+            oblg.setObligeeType(ObligeeTypeEnum.valueOf(obligee.getObligeeType()));
+        }
+    }
+
+    private com.cnasurety.surbpi.financialfeed.feed.WritingCompany mapWritingCompanyCode(WritingCompany writingCompanyInputs) {
+        com.cnasurety.surbpi.financialfeed.feed.WritingCompany writingCompany = new com.cnasurety.surbpi.financialfeed.feed.WritingCompany();
+        if (null != writingCompanyInputs.getName()) {
+            writingCompany.setName(mapPartyName(FULL, writingCompanyInputs.getName()));
+        }
+        if (null != writingCompanyInputs.getEnterpriseID()) {
+            writingCompany.setWritingCompanyCode(StringUtils.leftPad(writingCompanyInputs.getEnterpriseID().toString(), 4, "0"));
+        }
+        return writingCompany;
+    }
+
+    public PartyName mapPartyName(java.lang.String type, java.lang.String value) {
+        PartyName partyName = new PartyName();
+        partyName.getName().add(mapPartyNameAttributeDetails(type, value));
+        return partyName;
+    }
+
+    private PartyNameAttributes mapPartyNameAttributeDetails(java.lang.String type, java.lang.String value) {
+        PartyNameAttributes partyNameAttributes = new PartyNameAttributes();
+        partyNameAttributes.setPartyNameType(type);
+        partyNameAttributes.setPartyNameValue(value);
+        return partyNameAttributes;
+    }
+
+    private com.cnasurety.surbpi.financialfeed.feed.Location mapPrincipalLocation(Location businessLocation) {
+        com.cnasurety.surbpi.financialfeed.feed.Location location = new com.cnasurety.surbpi.financialfeed.feed.Location();
+        PostalAddress postalAddress = new PostalAddress();
+        postalAddress.setCity(businessLocation.getLocationCity());
+        setAddressLines(postalAddress, businessLocation.getLocationAddress1());
+        setAddressLines(postalAddress, businessLocation.getLocationAddress2());
+        setAddressLines(postalAddress, businessLocation.getLocationAddress3());
+        setAddressLines(postalAddress, businessLocation.getLocationAddress4());
+        postalAddress.setPostalCode(businessLocation.getLocationPostalCode());
+        postalAddress.setStateCode(businessLocation.getLocationStateCode());
+        postalAddress.setStateProvince(businessLocation.getLocationState());
+        postalAddress.setCountry(businessLocation.getLocationCountry());
+        location.setPostalAddressType(FinancialUtil.getLocationAddressType(businessLocation.getLocationAddressType()));
+        location.setPostalAddress(postalAddress);
+        return location;
+    }
+
+    private void setAddressLines(PostalAddress postalAddress, java.lang.String addressLine) {
+        if (null != addressLine) {
+            postalAddress.getAddressLine().add(addressLine);
+        }
+    }
+
+    private PartyIdentifierAttributes mapPartyIdentifierAttributes(java.lang.String type, java.lang.String value, java.lang.String jurisdiction) {
+        PartyIdentifierAttributes partyIdentifierAttributes = new PartyIdentifierAttributes();
+        partyIdentifierAttributes.setIdentifierType(type);
+        partyIdentifierAttributes.setIdentifierValue(value);
+        if (null != jurisdiction) {
+            partyIdentifierAttributes.setIdentifierJurisdiction(jurisdiction);
+        }
+        return partyIdentifierAttributes;
+    }
+
+    @SneakyThrows
+    void mapPrincipal(Bond bond, Principal principal) {
+        bond.setBondPrincipalLegalName(principal.getPrincipalName());
+        InvolvedParty accountParty = new InvolvedParty();
+        accountParty.setPartyRoleType(CONST_PRINCIPAL);
+        PartyConstructs principalPartyConstructs = new PartyConstructs();
+
+        PartyIdentifier principalPartyIdentifier = new PartyIdentifier();
+        if (null != principal.getAccountId()) {
+            principalPartyIdentifier.getIdentifier().add(mapPartyIdentifierAttributes("Account Number", principal.getAccountId().toString(), null));
+        }
+        if (null != principal.getPrincipalLicense()) {
+            if (null != principal.getPrincipalLicense().getLicenseId()) {
+                principalPartyIdentifier.getIdentifier().add(mapPartyIdentifierAttributes("State Identification Number", principal.getPrincipalLicense().getLicenseId().toString(), null));
+            }
+            principalPartyIdentifier.getIdentifier().add(mapPartyIdentifierAttributes("Drivers License", principal.getPrincipalLicense().getLicenseNumber(), principal.getPrincipalLicense().getStateProvince()));
+            principalPartyIdentifier.getIdentifier().add(mapPartyIdentifierAttributes(principal.getPrincipalLicense().getLicenseType(), null, null));
+        }
+
+        PartyAttributes principalPartyAttributes = new PartyAttributes();
+        PartyName principalPartyName = new PartyName();
+
+        if (BUSINESS.equalsIgnoreCase(principal.getPrincipalEntityType())) {
+            mapBusinessPrincipal(principal, principalPartyName, principalPartyConstructs, principalPartyAttributes);
+        } else {
+            mapIndividualPrincipal(principal, principalPartyName, principalPartyConstructs);
+        }
+        principalPartyConstructs.setPartyType(FinancialUtil.getPartyType(principal.getPrincipalEntityType()));
+        principalPartyConstructs.setPartyAttributes(principalPartyAttributes);
+        principalPartyConstructs.setPartyIdentifier(principalPartyIdentifier);
+        accountParty.setPartyConstructs(principalPartyConstructs);
+        bond.getSuretyAccount().getAccountParty().add(accountParty);
+
+        //Account Holder Same As Principal
+        InvolvedParty accountHolderParty = new InvolvedParty();
+        accountHolderParty.setPartyRoleType("Account Holder");
+        accountHolderParty.setPartyConstructs(principalPartyConstructs);
+        bond.getSuretyAccount().getAccountParty().add(accountHolderParty);
+    }
+
+    private void mapIndividualPrincipal(Principal principal, PartyName principalPartyName, PartyConstructs principalPartyConstructs) {
+        if (null != principal.getIndividual()) {
+            java.lang.String personBusinessName = "%s%s%s".formatted(principal.getIndividual().getIndividualFirstName(), FinancialUtil.getNonNullString(principal.getIndividual().getIndividualMiddleName()), FinancialUtil.getNonNullString(principal.getIndividual().getIndividualLastName()));
+            principalPartyName.getName().add(mapPartyNameAttributeDetails(FULL, personBusinessName));
+            principalPartyConstructs.setPartyName(principalPartyName);
+            mapPrincipalIndividualPartyName(principalPartyConstructs, principal);
+        }
+    }
+
+    private void mapBusinessPrincipal(Principal principal, PartyName principalPartyName, PartyConstructs principalPartyConstructs, PartyAttributes principalPartyAttributes) throws DatatypeConfigurationException {
+        if(null != principal.getBusiness()) {
+            if (null != principal.getBusiness().getDoingBusinessAs()) {
+                principalPartyName.getName().add(mapPartyNameAttributeDetails("DBA", principal.getBusiness().getDoingBusinessAs()));
+            }
+            Financials principalFinancials = new Financials();
+            Common principalCommon = new Common();
+            PartyQuestion partyQuestion = new PartyQuestion();
+            AskedQuestion askedQuestion = new AskedQuestion();
+            askedQuestion.setQuestionId("businessStartDate");
+            if (null != principal.getBusiness().getIncorporationDate()) {
+                principalFinancials.setNumberOfYearsInTheBusiness(BigDecimal.valueOf(YEARS.between(principal.getBusiness().getIncorporationDate(), LocalDateTime.now())));
+                principalCommon.setBusinessStartDate(DatatypeFactory.newInstance().newXMLGregorianCalendar(principal.getBusiness().getIncorporationDate().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME)));
+                askedQuestion.setAnswer(principal.getBusiness().getIncorporationDate().toString());
+            }
+            partyQuestion.getAskedQuestion().add(askedQuestion);
+            principalPartyConstructs.getPartyQuestion().add(partyQuestion);
+
+            principalFinancials.setLegalEntityType(FinancialUtil.getLegalEntityTypeEnum(principal.getBusiness().getBusinessLegalEntityType()));
+            principalFinancials.setLegalEntityStateCode(principal.getBusiness().getIncorporationState());
+            principalFinancials.setOwnershipType(OwnershipTypeEnum.UNKNOWN);
+            principalPartyAttributes.setFinancials(principalFinancials);
+
+            principalPartyAttributes.setCommon(principalCommon);
+            if (null != principal.getBusiness().getBusinessName()) {
+                principalPartyName.getName().add(mapPartyNameAttributeDetails(FULL, principal.getBusiness().getBusinessName()));
+            }
+            PartyLocation principalPartyLocation = new PartyLocation();
+            if (!principal.getBusiness().getLocations().isEmpty()) {
+                principalPartyLocation.getLocation().add(mapPrincipalLocation(principal.getBusiness().getLocations().getFirst()));
+            }
+            principalPartyConstructs.setPartyLocation(principalPartyLocation);
+            principalPartyConstructs.setPartyName(principalPartyName);
+        }
+    }
+
+    private void mapPrincipalIndividualPartyName(PartyConstructs principalPartyConstructs, Principal principal) {
+        var hashMap = new HashMap<java.lang.String, java.lang.String>();
+        hashMap.put("first", principal.getIndividual().getIndividualFirstName());
+        hashMap.put("middle", principal.getIndividual().getIndividualMiddleName());
+        hashMap.put("last", principal.getIndividual().getIndividualLastName());
+        var nameAttributes = hashMap.entrySet();
+        nameAttributes.stream().filter(attributes -> null != attributes.getValue()).forEach(partyAttributes -> principalPartyConstructs.getPartyName().getName().add(mapPartyNameAttributeDetails(partyAttributes.getKey(), partyAttributes.getValue())));
+        PartyLocation principalPartyLocation = new PartyLocation();
+        principalPartyLocation.getLocation().add(mapPrincipalLocation(principal.getIndividual().getLocation()));
+        principalPartyConstructs.setPartyLocation(principalPartyLocation);
+    }
+
+    void mapJob(Bond bond, Job job) {
+        BondProperty bondProperty = new BondProperty();
+        PostalAddressTypeCodeValue postalAddressTypeCodeValue = new PostalAddressTypeCodeValue();
+        PostalAddress postalAddress = new PostalAddress();
+        BondLocation bondLocation = new BondLocation();
+        postalAddress.setPostalCode("29212");
+        postalAddress.setCity(job.getCity());
+        postalAddress.setStateCode(job.getStateProvinceCode());
+        postalAddressTypeCodeValue.setAddressValue(postalAddress);
+        bondLocation.getAddress().add(postalAddressTypeCodeValue);
+        bondProperty.setBondLocation(bondLocation);
+        bond.setProjectDescripton(job.getJobDescription());
+        bond.getBondProperty().add(bondProperty);
+    }
+}
+------------------------------------------
+package com.cnasurety.surbpi.financialfeed.listener.integration.transformer;
+
+
+import com.cnasurety.bpets.model.BondEventBase;
+import com.cnasurety.surbpi.financialfeed.feed.Bond;
+import com.cnasurety.surbpi.financialfeed.feed.BondRewrite;
+import com.cnasurety.surbpi.financialfeed.feed.BondRewriteTransaction;
+import com.cnasurety.surbpi.financialfeed.feed.BondTransactionDetail;
+import com.cnasurety.surbpi.financialfeed.feed.SaveBondRewrite;
+import com.cnasurety.surbpi.financialfeed.feed.BondStatusTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.BondTransactionTypeEnum;
+import com.cnasurety.surbpi.financialfeed.listener.constant.BPPaymentStatus;
+import com.cnasurety.surbpi.financialfeed.listener.domain.pojo.BpetsMessage;
+import com.cnasurety.surbpi.financialfeed.listener.domain.pojo.MessageWrapper;
+import com.cnasurety.surbpi.financialfeed.listener.service.InboundGwServiceClient;
+import com.cnasurety.surbpi.financialfeed.listener.util.FinancialUtil;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.integration.annotation.Transformer;
+import org.springframework.stereotype.Component;
+
+import javax.xml.datatype.DatatypeConfigurationException;
+import javax.xml.datatype.DatatypeFactory;
+
+@Component
+@Slf4j
+@RequiredArgsConstructor
+public class ReissueBondDataTransformer extends BondDataTransformer {
+    final PreviousBondDataTransformer previousBondDataTransformer;
+    final InboundGwServiceClient inboundGwServiceClient;
+    final FinancialUtil financialUtil;
+
+    @Transformer
+    public SaveBondRewrite saveBondReissue(MessageWrapper message) {
+        try {
+            SaveBondRewrite saveBondReissue = new SaveBondRewrite();
+            Bond reissueBond = transformBond(message);
+            Bond bond = transformBond(message);
+            Bond previousBond = previousBondDataTransformer.transformPreviousBond(message.getBpetsMessage().getEventData(), bond, message);
+            saveBondReissue.setPreviousBond(previousBond);
+            financialUtil.setPaymentStatusForComplimentaryPolicies(message);
+            updatePaymentStatusForReIssuedBond(message.getBpetsMessage());
+            saveBondReissue.setWritingCompanyCode(bond.getSuretyMarketableProduct().getWritingCompany().getWritingCompanyCode());
+            saveBondReissue.setBondRewriteTransaction(getBondReissueTransaction(message.getBpetsMessage(), reissueBond));
+            saveBondReissue.setBondRewriteTransactionExt(getBondReissueTransactionExt(message.getBpetsMessage(), reissueBond));
+            saveBondReissue.setBond(reissueBond);
+            return saveBondReissue;
+        } catch (JsonProcessingException | DatatypeConfigurationException e) {
+            log.error("Save Bond Rewrite data extraction failed", e);
+            return null;
+        }
+    }
+
+    private BondRewriteTransaction getBondReissueTransaction(BpetsMessage message, Bond reissueBond) throws DatatypeConfigurationException {
+        BondRewriteTransaction bondReissueTransaction = new BondRewriteTransaction();
+        bondReissueTransaction.setTransactionNumber(FinancialUtil.mapTransactionNumber(message.getId()));
+        bondReissueTransaction.setBondNumber(FinancialUtil.mapBondNumber(message.getEventData().getBond().getBondNumber()));
+        bondReissueTransaction.setBondRewrite(mapBondReissue(reissueBond));
+        bondReissueTransaction.setBondTransactionDetail(mapBondTransactionDetail(message));
+        return bondReissueTransaction;
+    }
+
+    private BondRewrite mapBondReissue(Bond reissueBond) {
+        BondRewrite reissue = new BondRewrite();
+        reissue.setBondSubmission(reissueBond);
+        return reissue;
+    }
+
+    private BondTransactionDetail mapBondTransactionDetail(BpetsMessage message) throws DatatypeConfigurationException {
+        BondTransactionDetail bondTransactionDetail = new BondTransactionDetail();
+        bondTransactionDetail.setStatusType(BondStatusTypeEnum.COMPLETED);
+        bondTransactionDetail.setTransactionType(BondTransactionTypeEnum.REWRITE);
+        bondTransactionDetail.setSourceSystemId("BPNG");
+        bondTransactionDetail.setBoundDateTime(FinancialUtil.convertToXMLGregorianCalendar(message.getEventData().getBond().getIssueDate()));
+        bondTransactionDetail.setProcessedDateTime(DatatypeFactory.newInstance().newXMLGregorianCalendar(String.valueOf(message.getOriginatedTime())));
+        bondTransactionDetail.setTransactionLastUpdatedDateTime(FinancialUtil.convertToXMLGregorianCalendar(message.getEventData().getBond().getIssueDate()));
+        return bondTransactionDetail;
+    }
+
+    private SaveBondRewrite.BondRewriteTransactionExt getBondReissueTransactionExt(BpetsMessage message, Bond reissueBond) {
+        SaveBondRewrite.BondRewriteTransactionExt bondReissueTransactionExt = new SaveBondRewrite.BondRewriteTransactionExt();
+        if (null != message.getEventData().getBondFinancialView()) {
+            bondReissueTransactionExt.setReturnedPremiumAmount((FinancialUtil.mapAmount(message.getEventData().getBondFinancialView().getInvoice().getGrossPremium())));
+            bondReissueTransactionExt.setRewritePremiumAmount((FinancialUtil.mapAmount(message.getEventData().getBondFinancialView().getInvoice().getGrossPremium())));
+            bondReissueTransactionExt.setCancelledTermPremiumAmount(FinancialUtil.mapAmount(message.getEventData().getBondFinancialView().getInvoice().getGrossPremium()));
+            if (null != message.getEventData().getBondFinancialView().getInvoice() && null != message.getEventData().getBondFinancialView().getInvoice().getTaxes()) {
+                bondReissueTransactionExt.setReturnedSurtaxAmount(FinancialUtil.mapAmount(message.getEventData().getBondFinancialView().getInvoice().getTaxes().abs()));
+                bondReissueTransactionExt.setRewriteSurtaxAmount(FinancialUtil.mapAmount(message.getEventData().getBondFinancialView().getInvoice().getTaxes().abs()));
+                bondReissueTransactionExt.setCancelledTermSurtaxAmount(FinancialUtil.mapAmount(message.getEventData().getBondFinancialView().getInvoice().getTaxes().abs()));
+            }
+        }
+        if (!reissueBond.getBondTerm().get(0).getBondFee().isEmpty()) {
+            bondReissueTransactionExt.getRewriteBondFee().add(reissueBond.getBondTerm().get(0).getBondFee().get(0));
+        }
+        bondReissueTransactionExt.setOriginalTermRewriteIndicator("00".equalsIgnoreCase(message.getEventData().getBond().getRenewalNumber()));
+        return bondReissueTransactionExt;
+    }
+
+    private void updatePaymentStatusForReIssuedBond(BpetsMessage bpetsMessage) {
+        BondEventBase eventData = bpetsMessage.getEventData();
+        if (null != eventData && null != eventData.getBond()
+                && null != eventData.getBond().getTermPaymentStatusDetails()
+                && null != eventData.getBond().getTermPaymentStatusDetails().getTermPaymentStatus()
+                && !BPPaymentStatus.PAID.toString().equalsIgnoreCase(eventData.getBond().getTermPaymentStatusDetails().getTermPaymentStatus())
+                && !BPPaymentStatus.NOT_PAID.toString().equalsIgnoreCase(eventData.getBond().getTermPaymentStatusDetails().getTermPaymentStatus())) {
+            financialUtil.updatePaymentStatus(eventData, BPPaymentStatus.NOT_PAID);
+        }
+    }
+}
+----------------------------------------
+package com.cnasurety.surbpi.financialfeed.listener.integration.transformer;
+
+import com.cnasurety.bpets.model.BondEventBase;
+
+import com.cnasurety.surbpi.financialfeed.feed.Bond;
+import com.cnasurety.surbpi.financialfeed.feed.BondRiskLocation;
+import com.cnasurety.surbpi.financialfeed.feed.BondTerm;
+import com.cnasurety.surbpi.financialfeed.feed.PostalAddressTypeCodeValue;
+import com.cnasurety.surbpi.financialfeed.feed.PostalAddress;
+import com.cnasurety.surbpi.financialfeed.feed.BondDistributor;
+import com.cnasurety.surbpi.financialfeed.feed.SuretyDistributor;
+import com.cnasurety.surbpi.financialfeed.feed.SuretyDistributorIdentifier;
+import com.cnasurety.surbpi.financialfeed.feed.BondProducer;
+import com.cnasurety.surbpi.financialfeed.feed.Producer;
+import com.cnasurety.surbpi.financialfeed.feed.PartyName;
+import com.cnasurety.surbpi.financialfeed.feed.SuretyCommissionTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.PartyNameAttributes;
+import com.cnasurety.surbpi.financialfeed.feed.BondProducerRoleTypeEnum;
+import com.cnasurety.surbpi.financialfeed.listener.domain.pojo.MessageWrapper;
+import com.cnasurety.surbpi.financialfeed.listener.domain.pojo.MptInfo;
+import com.cnasurety.surbpi.financialfeed.listener.util.FinancialUtil;
+import lombok.NoArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
+
+import javax.xml.datatype.DatatypeConfigurationException;
+import javax.xml.datatype.DatatypeFactory;
+import java.math.BigDecimal;
+
+@Component
+@Slf4j
+@NoArgsConstructor
+public class PreviousBondDataTransformer extends BondDataTransformer {
+
+    private static final String FULL = "Full";
+
+    private static final String CONST_PHYSICAL = "Physical";
+
+    private static final String MODIFYBONDBILLINGARRANGEMENTSEVENT = "ModifyBondBillingArrangementsEvent";
+
+    Bond transformPreviousBond(BondEventBase eventData, Bond previousBond, MessageWrapper message) throws DatatypeConfigurationException {
+        BondTerm previousBondTerm = previousBond.getBondTerm().get(0);
+        mapPreviousBondDetails(previousBond, eventData);
+        mapPreviousBondTermDetails(previousBondTerm, eventData, message);
+        mapSuretyAccount(previousBond, eventData);
+        mapSuretyMarketableAccount(previousBond, eventData);
+        if (message.getBpetsMessage().getEventDataType().contains(MODIFYBONDBILLINGARRANGEMENTSEVENT)) {
+            mapPreviousBillingArrangement(previousBond, eventData);
+        }
+        return previousBond;
+    }
+
+    private void mapPreviousBillingArrangement(Bond previousBond, BondEventBase eventData) {
+        previousBond.getBondTerm().get(0).setTermBillingType(FinancialUtil.getPreviousBondBillingType(eventData.getBillingSettings().getBillToCodeIssuance()));
+    }
+
+    private void mapSuretyMarketableAccount(Bond previousBond, BondEventBase eventData) {
+        if (null != eventData.getPreviousObligees() && !eventData.getPreviousObligees().isEmpty()) {
+            previousBond.getSuretyMarketableProduct().getBondObligee().clear();
+            mapBondObligeeDetails(previousBond, eventData.getPreviousObligees());
+        }
+    }
+
+    private void mapSuretyAccount(Bond previousBond, BondEventBase eventData) {
+        if (null != eventData.getPreviousPrincipals() && !eventData.getPreviousPrincipals().isEmpty()) {
+            previousBond.getSuretyAccount().getAccountParty().clear();
+            mapPrincipal(previousBond, eventData.getPreviousPrincipals().get(eventData.getPreviousPrincipals().size() - 1));
+        }
+    }
+
+    private void mapPreviousBondDetails(Bond previousBond, BondEventBase eventData) throws DatatypeConfigurationException {
+        if (eventData.getPreviousBond() != null) {
+            previousBond.getSubmissionNumber().setValue(eventData.getPreviousBond().getBondApplicationId().toString());
+            previousBond.getBondNumber().setValue(eventData.getPreviousBond().getBondNumber());
+            previousBond.setEndOfLiabilityDate(eventData.getPreviousBond().getExpirationDate() != null ? DatatypeFactory.newInstance().newXMLGregorianCalendar(eventData.getPreviousBond().getExpirationDate()) : null);
+            previousBond.setOriginalEffectiveDate(eventData.getPreviousBond().getEffectiveDate() != null ? DatatypeFactory.newInstance().newXMLGregorianCalendar(eventData.getPreviousBond().getEffectiveDate()) : null);
+        }
+    }
+
+    private void mapPreviousBondTermDetails(BondTerm previousBondTerm, BondEventBase message, MessageWrapper messageWrapper) throws DatatypeConfigurationException {
+        if (null != message.getPreviousBondFinancialView()) {
+            previousBondTerm.setSurtaxAmount(FinancialUtil.mapAmount(message.getPreviousBondFinancialView().getTotalTaxes()));
+            if (null != message.getPreviousBondFinancialView().getInvoice()) {
+                previousBondTerm.setPenaltyAmount(FinancialUtil.mapAmount(message.getPreviousBondFinancialView().getInvoice().getBondAmount()));
+            }
+        }
+        if (message.getPreviousBond() != null) {
+            previousBondTerm.setTermNumber(message.getPreviousBond().getRenewalNumber());
+            previousBondTerm.setEffectiveDate(message.getPreviousBond().getEffectiveDate() != null ? DatatypeFactory.newInstance().newXMLGregorianCalendar(message.getPreviousBond().getEffectiveDate()) : null);
+            previousBondTerm.setExpirationDate(message.getPreviousBond().getExpirationDate() != null ? DatatypeFactory.newInstance().newXMLGregorianCalendar(message.getPreviousBond().getExpirationDate()) : null);
+            previousBondTerm.setBoundDateTime(FinancialUtil.convertToXMLGregorianCalendar(message.getPreviousBond().getIssueDate()));
+            if (Boolean.TRUE.equals(message.getPreviousBond().getRenewableBond())) {
+                previousBondTerm.setRenewalDate(message.getPreviousBond().getRenewalDate() != null ? DatatypeFactory.newInstance().newXMLGregorianCalendar(message.getPreviousBond().getRenewalDate()) : null);
+            }
+        }
+
+        mapPreviousBondDistributorDetails(previousBondTerm, message);
+
+        mapPreviousBondFeeDetails(previousBondTerm, message);
+
+        mapPreviousBondRiskLocation(previousBondTerm, messageWrapper);
+
+    }
+
+    private void mapPreviousBondRiskLocation(BondTerm previousBondTerm, MessageWrapper messageWrapper) {
+        MptInfo previousMptInfo = messageWrapper.getPreviousMptInfo();
+        if (null != previousMptInfo) {
+            log.info("Received Previous Place Code {} and PESCode {} from MPT API", previousMptInfo.getCnaPlaceCode(), previousMptInfo.getPesStateCode());
+            BondRiskLocation bondRiskLocation = new BondRiskLocation();
+            PostalAddressTypeCodeValue postalAddressTypeCodeValue = new PostalAddressTypeCodeValue();
+            PostalAddress standardizedAddress = new PostalAddress();
+            standardizedAddress.setPESStateCode(previousMptInfo.getPesStateCode());
+            standardizedAddress.setPlaceCode(previousMptInfo.getCnaPlaceCode());
+            if (null != previousMptInfo.getStandardizedMptAddress()) {
+                bondRiskLocation.setLocationTypeCode(previousMptInfo.getStandardizedMptAddress().getPartyType());
+                bondRiskLocation.setLocationTypeName(previousMptInfo.getStandardizedMptAddress().getPartyType());
+                standardizedAddress.getAddressLine().addAll(previousMptInfo.getStandardizedMptAddress().getAddressLine());
+                standardizedAddress.setCity(previousMptInfo.getStandardizedMptAddress().getCity());
+                standardizedAddress.setStateCode(previousMptInfo.getStandardizedMptAddress().getStateCode());
+                standardizedAddress.setPostalCode(previousMptInfo.getStandardizedMptAddress().getPostalCode());
+            }
+            postalAddressTypeCodeValue.setAddressType(CONST_PHYSICAL);
+            postalAddressTypeCodeValue.setAddressValue(standardizedAddress);
+            bondRiskLocation.getAddress().add(postalAddressTypeCodeValue);
+            bondRiskLocation.setSequenceNumber("1");
+            bondRiskLocation.setAllocationFactor(BigDecimal.valueOf(100));
+            previousBondTerm.getBondRiskLocation().clear();
+            previousBondTerm.getBondRiskLocation().add(bondRiskLocation);
+        }
+    }
+
+    private void mapPreviousBondFeeDetails(BondTerm previousBondTerm, BondEventBase eventData) {
+        if (!previousBondTerm.getBondFee().isEmpty()) {
+            previousBondTerm.getBondFee().clear();
+        }
+        if (eventData.getPreviousBondFinancialView() != null) {
+            mapBondFeeDetails(previousBondTerm, eventData.getPreviousBondFinancialView());
+        }
+    }
+
+    void mapPreviousBondDistributorDetails(BondTerm previousBondTerm, BondEventBase eventData) {
+        BondDistributor previousBondDistributor = previousBondTerm.getBondDistributor().get(0);
+        SuretyDistributor suretyDistributor = previousBondDistributor.getSuretyDistributor();
+        SuretyDistributorIdentifier suretyDistributorIdentifier = suretyDistributor.getSuretyDistributorIdentifier();
+        if (eventData.getPreviousAgency() != null && eventData.getPreviousAgency().getEnterpriseId() != null) {
+            suretyDistributorIdentifier.setSuretyDistributorCode(FinancialUtil.splitString(eventData.getPreviousAgency().getEnterpriseId(), "Second"));
+            suretyDistributorIdentifier.setSuretyStateCode(FinancialUtil.splitString(eventData.getPreviousAgency().getEnterpriseId(), "First"));
+        }
+        if (eventData.getPreviousBondFinancial() != null) {
+            previousBondDistributor.setCommissionPercentage(eventData.getPreviousBondFinancial().getInvoice().getCommissionRate().multiply(BigDecimal.valueOf(100)));
+            if (null != eventData.getPreviousBondFinancial().getCommissions()) {
+                previousBondDistributor.setCommissionType(eventData.getPreviousBondFinancial().getCommissions().getOverrideAmount() != null ? SuretyCommissionTypeEnum.BOND : SuretyCommissionTypeEnum.AGENCY);
+            }
+        }
+        BondProducer bondProducer = previousBondDistributor.getBondProducer().get(0);
+        Producer producer = bondProducer.getProducer();
+        if (eventData.getPreviousAttorneyInFact() != null)  {
+            if ("AGENCY".equalsIgnoreCase(eventData.getPreviousAttorneyInFact().getAttorneyInFactTypeCode())) {
+                bondProducer.setProducerRoleType(BondProducerRoleTypeEnum.ATTORNEY_IN_FACT);
+            }
+            producer.setProducerName(mapPartyName(FULL, eventData.getPreviousAttorneyInFact().getFirstName().concat(" ").concat(eventData.getPreviousAttorneyInFact().getLastName())));
+        }
+        if (eventData.getPreviousAgent() != null) {
+            if (Boolean.TRUE.equals(eventData.getPreviousAgent().getPowerOfAttorneyFlag())) {
+                producer.setProducerName(updatePartyName(eventData.getPreviousAgent().getFullName()));
+            } else {
+                producer.setProducerName(updatePartyName(eventData.getPreviousAttorneyInFact().getFirstName().concat(" ").concat(eventData.getPreviousAttorneyInFact().getLastName())));
+            }
+        }
+    }
+
+    private PartyName updatePartyName(String value) {
+        PartyName partyName = new PartyName();
+        partyName.getName().add(updatePartyNameAttributeDetails(value));
+        return partyName;
+    }
+
+    private PartyNameAttributes updatePartyNameAttributeDetails(String value) {
+        PartyNameAttributes partyNameAttributes = new PartyNameAttributes();
+        partyNameAttributes.setPartyNameType(FULL);
+        partyNameAttributes.setPartyNameValue(value);
+        return partyNameAttributes;
+    }
+}
+--------------------------------
+package com.cnasurety.surbpi.financialfeed.listener.integration.transformer;
+
+import com.cnasurety.surbpi.financialfeed.feed.Bond;
+import com.cnasurety.surbpi.financialfeed.feed.BondReinstatementTransaction;
+import com.cnasurety.surbpi.financialfeed.feed.BondStatusTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.BondTransactionDetail;
+import com.cnasurety.surbpi.financialfeed.feed.BondTransactionTypeEnum;
+import com.cnasurety.surbpi.financialfeed.feed.SaveBondReinstatement;
+import com.cnasurety.surbpi.financialfeed.feed.SaveBondReinstatement.BondReinstatementTransactionExt;
+import com.cnasurety.surbpi.financialfeed.listener.domain.exception.RetrievalServiceException;
+import com.cnasurety.surbpi.financialfeed.listener.domain.pojo.BondResponse;
+import com.cnasurety.surbpi.financialfeed.listener.domain.pojo.BpetsMessage;
+import com.cnasurety.surbpi.financialfeed.listener.domain.pojo.MessageWrapper;
+import com.cnasurety.surbpi.financialfeed.listener.service.BondRestDataApiServiceClient;
+import com.cnasurety.surbpi.financialfeed.listener.util.FinancialUtil;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.integration.annotation.Transformer;
+import org.springframework.stereotype.Component;
+
+import javax.xml.datatype.DatatypeConfigurationException;
+import javax.xml.datatype.DatatypeFactory;
+
+@Component
+@Slf4j
+@AllArgsConstructor
+public class ReinstatementBondDataTransformer extends BondDataTransformer {
+
+    public static final String SOURCE_SYSTEM = "BPNG";
+    private static final String ORIGINAL_RENEWAL_NUM = "00";
+
+    final BondRestDataApiServiceClient bondRestDataApiServiceClient;
+    final FinancialUtil financialUtil;
+
+    @Transformer
+    public SaveBondReinstatement saveBondReinstatement(MessageWrapper message) {
+        try {
+            SaveBondReinstatement saveBondReinstatement = new SaveBondReinstatement();
+            Bond reinstatementBond = transformBond(message);
+            updateForReinstateBond(reinstatementBond, message.getBpetsMessage());
+            saveBondReinstatement.setBond(reinstatementBond);
+            saveBondReinstatement.setBondReinstatementTransaction(mapBondReinstatementTransaction(message.getBpetsMessage()));
+            saveBondReinstatement.setBondReinstatementTransactionExt(mapBondReinstatementTransactionExt(message.getBpetsMessage(), reinstatementBond));
+            financialUtil.setPaymentStatusForComplimentaryPolicies(message);
+            return saveBondReinstatement;
+        } catch (JsonProcessingException | DatatypeConfigurationException e) {
+            log.error("Save Bond Reinstatement data extraction failed", e);
+            return null;
+        }
+    }
+
+    private void updateForReinstateBond(Bond reinstateBond, BpetsMessage message) {
+        try {
+            BondResponse bondResponse = bondRestDataApiServiceClient.getBondDetails(reinstateBond.getBondNumber().getValue(), reinstateBond.getBondTerm().get(0).getTermNumber());
+            if (null != bondResponse.getBondList()) {
+                reinstateBond.getBondTerm().get(0).setPremiumAmount(FinancialUtil.mapAmount(bondResponse.getBondList().get(0).getPremiumAmount()));
+            } else {
+                log.error("Bond Retrieval Service Failure - Bond Not Found");
+                throw new RetrievalServiceException("Bond Retrieval Service Failure");
+            }
+        } catch (Exception e) {
+            log.error(String.format("Exception from Bond Retrieval Service - %s", e.getMessage()));
+            throw new RetrievalServiceException("Bond Retrieval Service Failure");
+        }
+        if (null != message.getEventData().getBondFinancialView() && null != message.getEventData().getBondFinancialView().getInvoice()) {
+            reinstateBond.getBondTerm().get(0).setAdditionalPremiumDueAmount(FinancialUtil.mapAmount(message.getEventData().getBondFinancialView().getInvoice().getTotalDiscountedGrossPremium()));
+        }
+        if (!"00".equalsIgnoreCase(message.getEventData().getBond().getRenewalNumber())) {
+            reinstateBond.setOriginalEffectiveDate(null);
+        }
+    }
+
+    private BondReinstatementTransaction mapBondReinstatementTransaction(BpetsMessage message) throws DatatypeConfigurationException {
+        BondReinstatementTransaction bondReinstatementTransaction = new BondReinstatementTransaction();
+        bondReinstatementTransaction.setTransactionNumber(FinancialUtil.mapTransactionNumber(message.getId()));
+        bondReinstatementTransaction.setBondNumber(FinancialUtil.mapBondNumber(message.getEventData().getBond().getBondNumber()));
+        bondReinstatementTransaction.setBondTransactionDetail(mapBondTransactionDetail(message));
+        return bondReinstatementTransaction;
+    }
+
+    private BondTransactionDetail mapBondTransactionDetail(BpetsMessage message) throws DatatypeConfigurationException {
+        BondTransactionDetail bondTransactionDetail = new BondTransactionDetail();
+        bondTransactionDetail.setStatusType(BondStatusTypeEnum.COMPLETED);
+        bondTransactionDetail.setTransactionType(BondTransactionTypeEnum.REINSTATEMENT);
+        bondTransactionDetail.setSourceSystemId(SOURCE_SYSTEM);
+        bondTransactionDetail.setBoundDateTime(FinancialUtil.convertToXMLGregorianCalendar(message.getEventData().getBond().getIssueDate()));
+        bondTransactionDetail.setProcessedDateTime(DatatypeFactory.newInstance().newXMLGregorianCalendar(String.valueOf(message.getOriginatedTime())));
+        bondTransactionDetail.setTransactionLastUpdatedDateTime(FinancialUtil.convertToXMLGregorianCalendar(message.getEventData().getBond().getIssueDate()));
+        return bondTransactionDetail;
+    }
+
+    private BondReinstatementTransactionExt mapBondReinstatementTransactionExt(BpetsMessage message, Bond reinstatementBond) {
+        SaveBondReinstatement.BondReinstatementTransactionExt bondReinstatementTransactionExt = new BondReinstatementTransactionExt();
+        if (null != message.getEventData().getBondFinancialView() && null != message.getEventData().getBondFinancialView().getInvoice()) {
+            bondReinstatementTransactionExt.setReinstatedPremiumAmount(FinancialUtil.mapAmount(message.getEventData().getBondFinancialView().getInvoice().getTotalDiscountedGrossPremium()));
+            bondReinstatementTransactionExt.setReinstatedSurtaxAmount(FinancialUtil.mapAmount(message.getEventData().getBondFinancialView().getInvoice().getTaxes()));
+        }
+        reinstatementBond.getBondTerm().forEach(term -> term.getBondFee().forEach(fee -> bondReinstatementTransactionExt.getReinstatedBondFee().add(fee)));
+        return bondReinstatementTransactionExt;
+    }
+}
